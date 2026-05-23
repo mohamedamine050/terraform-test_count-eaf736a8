@@ -1,8 +1,3 @@
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Remote backend — state stored in S3, locking via DynamoDB
-# (Provisioned by the bootstrap/ folder)
-# ─────────────────────────────────────────────────────────────────────────────
 terraform {
   backend "s3" {
     bucket         = "tfstate-test-count-m949nqzv"
@@ -12,6 +7,12 @@ terraform {
     encrypt        = true
   }
 }
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Remote backend — state stored in S3, locking via DynamoDB
+# (Provisioned by the bootstrap/ folder)
+# ─────────────────────────────────────────────────────────────────────────────
+
 
 terraform {
   required_version = ">= 1.5.0"
@@ -67,6 +68,20 @@ resource "aws_s3_object" "glue_test_script" {
   bucket       = aws_s3_bucket.glue_scripts.id
   key          = "scripts/glue_test_script.py"
   source       = local_file.glue_test_script.filename
+  content_type = "text/x-python"
+}
+
+resource "local_file" "glue_test_script_2" {
+  filename = "${path.module}/glue_test_script_2.py"
+  content  = <<-EOF
+print("Hello from TEST script")
+EOF
+}
+
+resource "aws_s3_object" "glue_test_script_2" {
+  bucket       = aws_s3_bucket.glue_output.id
+  key          = "scripts/glue_test_script_2.py"
+  source       = local_file.glue_test_script_2.filename
   content_type = "text/x-python"
 }
 
@@ -129,6 +144,43 @@ resource "aws_glue_job" "count_job" {
 
   depends_on = [
     aws_s3_object.glue_test_script,
+    aws_iam_role_policy_attachment.glue_service,
+    aws_iam_role_policy_attachment.glue_admin
+  ]
+}
+
+resource "aws_glue_job" "count_job_2" {
+  name              = "${var.glue_job_base_name_2}-${random_string.suffix.result}"
+  role_arn          = aws_iam_role.glue.arn
+  glue_version      = "5.0"
+  max_retries       = 0
+  timeout           = 2880
+  number_of_workers = 2
+  worker_type       = "G.1X"
+
+  command {
+    name            = "glueetl"
+    script_location = "s3://${aws_s3_bucket.glue_output.bucket}/${aws_s3_object.glue_test_script_2.key}"
+    python_version  = "3"
+  }
+
+  default_arguments = {
+    "--job-language"                     = "python"
+    "--enable-metrics"                   = ""
+    "--enable-continuous-cloudwatch-log" = "true"
+    "--enable-continuous-log-filter"     = "true"
+    "--TempDir"                          = "s3://${aws_s3_bucket.glue_output.bucket}/temp/"
+    "--output_bucket"                    = aws_s3_bucket.glue_output.bucket
+    "--input_range_start"                = "1"
+    "--input_range_end"                  = "20"
+  }
+
+  execution_property {
+    max_concurrent_runs = 1
+  }
+
+  depends_on = [
+    aws_s3_object.glue_test_script_2,
     aws_iam_role_policy_attachment.glue_service,
     aws_iam_role_policy_attachment.glue_admin
   ]
